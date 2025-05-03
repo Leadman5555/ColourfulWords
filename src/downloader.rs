@@ -1,11 +1,11 @@
 use headless_chrome::{Browser, LaunchOptionsBuilder};
 use reqwest::blocking;
 use std::fmt;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 pub enum DownloaderError {
     ConnectionError,
-    ParsingError,
     NoResultsError,
     BrowserError,
     SearcherError,
@@ -14,9 +14,8 @@ pub enum DownloaderError {
 impl fmt::Display for DownloaderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            DownloaderError::ConnectionError => write!(f, "Failed to connect to the server"),
-            DownloaderError::ParsingError => write!(f, "Failed to parse the response"),
-            DownloaderError::NoResultsError => write!(f, "No results found"),
+            DownloaderError::ConnectionError => write!(f, "Failed to connect to the internet"),
+            DownloaderError::NoResultsError => write!(f, "No results found for the given keyword"),
             DownloaderError::BrowserError => write!(f, "Failed to initialize browser"),
             DownloaderError::SearcherError => write!(f, "Failed to search for given keyword"),
         }
@@ -26,7 +25,6 @@ impl fmt::Display for DownloaderError {
 impl std::error::Error for DownloaderError {}
 
 pub struct ImageDownloader {
-    keyword: String,
     urls: Vec<String>,
     index: usize,
 }
@@ -35,7 +33,6 @@ impl ImageDownloader {
     pub fn new(keyword: String) -> Result<Self, DownloaderError> {
         let urls = Self::get_urls(keyword.as_str(), "img.mimg")?;
         Ok(Self {
-            keyword,
             urls,
             index: 0,
         })
@@ -57,7 +54,7 @@ impl ImageDownloader {
             .new_tab()
             .map_err(|_| DownloaderError::BrowserError)?;
         tab.navigate_to(Self::get_search_url(keyword).as_str())
-            .map_err(|_| DownloaderError::SearcherError)?;
+            .map_err(|_| DownloaderError::ConnectionError)?;
         tab.wait_until_navigated()
             .map_err(|_| DownloaderError::SearcherError)?;
         let images = tab
@@ -82,6 +79,7 @@ impl Iterator for ImageDownloader {
     type Item = bytes::Bytes;
 
     fn next(&mut self) -> Option<Self::Item> {
+        println!("Next called");
         if self.index >= self.urls.len() {
             return None;
         }

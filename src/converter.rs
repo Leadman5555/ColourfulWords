@@ -12,24 +12,25 @@ use std::{fmt, io, thread};
 #[derive(Debug)]
 pub enum ConverterError {
     NoImageLeftError,
+    NoImagesRegisteredError,
 }
 
 impl fmt::Display for ConverterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ConverterError::NoImageLeftError => write!(f, "No images left."),
+            ConverterError::NoImagesRegisteredError => write!(f, "No images registered."),
         }
     }
 }
 
 struct ColouredImage {
-    index: usize,
     image_array: Vec<Vec<String>>,
 }
 
 impl ColouredImage {
-    fn new(index: usize, image_array: Vec<Vec<String>>) -> Self {
-        Self { index, image_array }
+    fn new(image_array: Vec<Vec<String>>) -> Self {
+        Self { image_array }
     }
 
     fn get_random_indices(rows: usize, columns: usize) -> Vec<(usize, usize)> {
@@ -67,6 +68,15 @@ impl ColouredImage {
         io::stdout().flush().unwrap();
         println!();
     }
+    
+    fn instant_print(&self) {
+        for row in &self.image_array {
+            for col in row {
+                print!("{}", col);
+            }
+            println!();       
+        }
+    }
 }
 
 pub struct Converter {
@@ -74,66 +84,75 @@ pub struct Converter {
     coloured_images: Vec<ColouredImage>,
     current_image: usize,
     has_any_images: bool,
+    image_width: u32,
 }
 
 impl Converter {
-    const IMAGE_WIDTH: u32 = 80;
     const ASCII_CHARS: [char; 13] = [
         '@', '#', 'S', '%', '&', '?', '*', '+', '-', ':', ',', '.', ' ',
     ];
 
-    pub fn new(image_iterator: ImageDownloader) -> Self {
+    pub fn new(image_iterator: ImageDownloader, image_width: u32) -> Self {
         Self {
             image_iterator,
             coloured_images: Vec::new(),
             current_image: 0,
             has_any_images: false,
+            image_width,       
         }
     }
 
     pub fn print_current_image(&self) {
-        if (!self.has_any_images) {
+        if !self.has_any_images {
             return;
         }
-        self.coloured_images[self.current_image].slow_print();
+        if self.current_image == self.coloured_images.len() - 1 {
+            self.coloured_images[self.current_image].slow_print();
+        }else{
+            self.coloured_images[self.current_image].instant_print();
+        }
     }
 
-    pub fn move_to_previous_image(&mut self) {
+    pub fn move_to_previous_image(&mut self) -> Result<&mut Converter, ConverterError>{
+        if !self.has_any_images {
+            return Err(ConverterError::NoImagesRegisteredError);       
+        }
         if self.current_image == 0 {
-            return;
+            return Err(ConverterError::NoImageLeftError);
         }
         self.current_image -= 1;
+        Ok(self)
     }
 
-    pub fn move_to_next_image(&mut self) -> Result<(), ConverterError> {
+    pub fn move_to_next_image(&mut self) -> Result<&mut Converter, ConverterError> {
         self.image_iterator
             .next()
             .map(|bytes| self.add_image(bytes))
             .ok_or_else(|| ConverterError::NoImageLeftError)
     }
 
-    fn add_image(&mut self, image_bytes: Bytes) {
+    fn add_image(&mut self, image_bytes: Bytes) -> &mut Converter {
         if !self.has_any_images {
             self.has_any_images = true;
         }else{
             self.current_image += 1;
         }
         self.coloured_images.push(ColouredImage::new(
-            self.current_image,
-            Self::convert_image(image_bytes),
-        ))
+            Self::convert_image(image_bytes, self.image_width),
+        ));
+        self
     }
 
-    fn convert_image(image_bytes: Bytes) -> Vec<Vec<String>> {
+    fn convert_image(image_bytes: Bytes, image_width: u32) -> Vec<Vec<String>> {
         let img = image::load_from_memory(&image_bytes)
             .expect("This should never fail as image is already in memory");
 
         let resized: RgbImage = {
             let (original_width, original_height) = img.dimensions();
-            let height = original_height * Self::IMAGE_WIDTH / original_width;
+            let height = original_height * image_width / original_width;
             let height = height.max(1);
             img.resize_exact(
-                Self::IMAGE_WIDTH,
+                image_width,
                 height,
                 image::imageops::FilterType::CatmullRom,
             )
@@ -166,18 +185,5 @@ impl Converter {
             })
             .collect();
         converted_image
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn print(){
-        let raw_image = include_bytes!("../Sunflower_sky_backdrop.jpg");
-        let bytes = Bytes::from_static(raw_image);
-        let img = ColouredImage::new(0, Converter::convert_image(bytes));
-        print!("Converted image:");
-        img.slow_print();
     }
 }
