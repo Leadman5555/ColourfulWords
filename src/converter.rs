@@ -125,10 +125,15 @@ impl Converter {
     }
 
     pub fn move_to_next_image(&mut self) -> Result<&mut Converter, ConverterError> {
-        self.image_iterator
-            .next()
-            .map(|bytes| self.add_image(bytes))
-            .ok_or_else(|| ConverterError::NoImageLeftError)
+        if !self.has_any_images || self.current_image == self.coloured_images.len() - 1 {
+            self.image_iterator
+                .next()
+                .map(|bytes| self.add_image(bytes))
+                .ok_or_else(|| ConverterError::NoImageLeftError)
+        }else{
+            self.current_image += 1;
+            Ok(self)
+        }
     }
 
     fn add_image(&mut self, image_bytes: Bytes) -> &mut Converter {

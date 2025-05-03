@@ -27,6 +27,7 @@ impl std::error::Error for DownloaderError {}
 pub struct ImageDownloader {
     urls: Vec<String>,
     index: usize,
+    client: blocking::Client,
 }
 
 impl ImageDownloader {
@@ -35,6 +36,7 @@ impl ImageDownloader {
         Ok(Self {
             urls,
             index: 0,
+            client: blocking::Client::default()
         })
     }
 
@@ -79,12 +81,14 @@ impl Iterator for ImageDownloader {
     type Item = bytes::Bytes;
 
     fn next(&mut self) -> Option<Self::Item> {
-        println!("Next called");
         if self.index >= self.urls.len() {
             return None;
         }
         let tmp = self.index;
         self.index += 1;
-        blocking::get(self.urls[tmp].as_str()).map_or(self.next(), |res| res.bytes().ok())
+        self.client.get(self.urls[tmp].as_str()).send().map_or_else(
+            |_| self.next(),
+            |res| res.bytes().ok()
+        )
     }
 }
