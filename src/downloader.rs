@@ -1,0 +1,92 @@
+use headless_chrome::{Browser, LaunchOptionsBuilder};
+use reqwest::blocking;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum DownloaderError {
+    ConnectionError,
+    ParsingError,
+    NoResultsError,
+    BrowserError,
+    SearcherError,
+}
+
+impl fmt::Display for DownloaderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DownloaderError::ConnectionError => write!(f, "Failed to connect to the server"),
+            DownloaderError::ParsingError => write!(f, "Failed to parse the response"),
+            DownloaderError::NoResultsError => write!(f, "No results found"),
+            DownloaderError::BrowserError => write!(f, "Failed to initialize browser"),
+            DownloaderError::SearcherError => write!(f, "Failed to search for given keyword"),
+        }
+    }
+}
+
+impl std::error::Error for DownloaderError {}
+
+pub struct ImageDownloader {
+    keyword: String,
+    urls: Vec<String>,
+    index: usize,
+}
+
+impl ImageDownloader {
+    pub fn new(keyword: String) -> Result<Self, DownloaderError> {
+        let urls = Self::get_urls(keyword.as_str(), "img.mimg")?;
+        Ok(Self {
+            keyword,
+            urls,
+            index: 0,
+        })
+    }
+
+    fn get_search_url(keyword: &str) -> String {
+        format!("{}{}", "https://www.bing.com/images/search?q=", keyword)
+    }
+
+    fn get_urls(keyword: &str, selector: &str) -> Result<Vec<String>, DownloaderError> {
+        let browser = Browser::new(
+            LaunchOptionsBuilder::default()
+                .headless(true)
+                .build()
+                .unwrap(),
+        )
+        .map_err(|_| DownloaderError::BrowserError)?;
+        let tab = browser
+            .new_tab()
+            .map_err(|_| DownloaderError::BrowserError)?;
+        tab.navigate_to(Self::get_search_url(keyword).as_str())
+            .map_err(|_| DownloaderError::SearcherError)?;
+        tab.wait_until_navigated()
+            .map_err(|_| DownloaderError::SearcherError)?;
+        let images = tab
+            .wait_for_elements(selector)
+            .map_err(|_| DownloaderError::NoResultsError)?;
+        let mut results: Vec<String> = Vec::new();
+        for img in images {
+            if let Some(attr) = img.attributes {
+                if let Some(src_attr) = attr.iter().find(|elem| elem.starts_with("https://")) {
+                    results.push(src_attr.to_string());
+                }
+            }
+        }
+        if results.is_empty() {
+            return Err(DownloaderError::NoResultsError);
+        }
+        Ok(results)
+    }
+}
+
+impl Iterator for ImageDownloader {
+    type Item = bytes::Bytes;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.urls.len() {
+            return None;
+        }
+        let tmp = self.index;
+        self.index += 1;
+        blocking::get(self.urls[tmp].as_str()).map_or(self.next(), |res| res.bytes().ok())
+    }
+}

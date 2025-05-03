@@ -1,0 +1,12 @@
+[package]
+name = "ColourfulWords"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { version = "0.12.15", features = ["blocking"]}
+bytes = "1.10.1"
+image = "0.25.6"
+rand = "0.9.1"
+rayon = "1.10.0"
+headless_chrome = {git = "https://github.com/rust-headless-chrome/rust-headless-chrome", features = ["fetch"]}
