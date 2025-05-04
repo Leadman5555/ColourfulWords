@@ -1,8 +1,11 @@
 mod downloader;
 mod converter;
+mod printer;
+mod ImageStorage;
 
 use crate::converter::Converter;
 use crate::downloader::ImageDownloader;
+use crate::printer::Printer;
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use dialoguer::Input;
@@ -37,7 +40,8 @@ fn register_valid_downloader() -> ImageDownloader {
 fn main() -> io::Result<()>{
     loop {
         let downloader: ImageDownloader = register_valid_downloader();
-        let mut converter: Converter = Converter::new(downloader, prompt_for_width());
+        let mut printer: Printer = Printer::new(Converter::new(downloader, prompt_for_width()));
+        //TODO always have menu visible, swap pictures instead of appending
         println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
         println!("Press 'Q' to change the keyword or 'ESC' to exit.");
         loop {
@@ -46,13 +50,13 @@ fn main() -> io::Result<()>{
                     if key_event.kind == KeyEventKind::Press {
                         match key_event.code {
                             KeyCode::Char('b') | KeyCode::Char('B') => {
-                                converter.move_to_previous_image()
+                                printer.move_to_previous_image()
                                     .map_or_else(|e| println!("Error: {}", e), |conv| -> () {
                                         conv.print_current_image();
                                     });
                             },
                             KeyCode::Char('n') | KeyCode::Char('N') => {
-                                converter.move_to_next_image()
+                                printer.move_to_next_image()
                                     .map_or_else(|e| println!("Error: {}", e), |conv| -> () {
                                         conv.print_current_image();
                                     });

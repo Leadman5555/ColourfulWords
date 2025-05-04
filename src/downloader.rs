@@ -81,14 +81,15 @@ impl Iterator for ImageDownloader {
     type Item = bytes::Bytes;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.urls.len() {
-            return None;
+        while self.index < self.urls.len() {
+            let tmp = self.index;
+            self.index += 1;
+            if let Ok(res) = self.client.get(self.urls[tmp].as_str()).send() {
+                if let Ok(bytes) = res.bytes() {
+                    return Some(bytes);
+                }
+            }
         }
-        let tmp = self.index;
-        self.index += 1;
-        self.client.get(self.urls[tmp].as_str()).send().map_or_else(
-            |_| self.next(),
-            |res| res.bytes().ok()
-        )
+        None
     }
 }
