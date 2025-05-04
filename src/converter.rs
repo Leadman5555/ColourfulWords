@@ -1,9 +1,11 @@
 use crate::downloader::ImageDownloader;
+use crate::printer::PrinterImageData;
 use bytes::Bytes;
 use image::{GenericImageView, RgbImage};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::fmt::Write as ftmWrite;
+use std::rc::Rc;
 
 pub struct Converter {
     image_iterator: ImageDownloader,
@@ -22,7 +24,7 @@ impl Converter {
         }
     }
 
-    fn convert_image(image_bytes: Bytes, image_width: u32) -> Vec<Vec<String>> {
+    fn convert_image(image_width: u32, image_name: Rc<String>, image_bytes: Bytes) -> PrinterImageData {
         let img = image::load_from_memory(&image_bytes)
             .expect("This should never fail as image is already in memory");
         let resized: RgbImage = {
@@ -57,16 +59,16 @@ impl Converter {
                 image_row
             })
             .collect();
-        converted_image
+        PrinterImageData::new(image_name, converted_image)
     }
 }
 
 impl Iterator for Converter {
-    type Item = Vec<Vec<String>>;
+    type Item = PrinterImageData;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.image_iterator
             .next()
-            .map(|image_bytes| Self::convert_image(image_bytes, self.image_width))
+            .map(|image_data| Self::convert_image(self.image_width, image_data.0, image_data.1))
     }
 }

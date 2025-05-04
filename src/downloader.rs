@@ -2,6 +2,7 @@ use headless_chrome::{Browser, LaunchOptionsBuilder};
 use reqwest::blocking;
 use std::fmt;
 use std::fmt::Debug;
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub enum DownloaderError {
@@ -28,6 +29,7 @@ pub struct ImageDownloader {
     urls: Vec<String>,
     index: usize,
     client: blocking::Client,
+    keyword: Rc<String>,   
 }
 
 impl ImageDownloader {
@@ -36,7 +38,8 @@ impl ImageDownloader {
         Ok(Self {
             urls,
             index: 0,
-            client: blocking::Client::default()
+            client: blocking::Client::default(),
+            keyword: Rc::new(keyword),
         })
     }
 
@@ -78,7 +81,7 @@ impl ImageDownloader {
 }
 
 impl Iterator for ImageDownloader {
-    type Item = bytes::Bytes;
+    type Item = (Rc<String>, bytes::Bytes);
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.index < self.urls.len() {
@@ -86,7 +89,7 @@ impl Iterator for ImageDownloader {
             self.index += 1;
             if let Ok(res) = self.client.get(self.urls[tmp].as_str()).send() {
                 if let Ok(bytes) = res.bytes() {
-                    return Some(bytes);
+                    return Some((self.keyword.clone(), bytes));
                 }
             }
         }
