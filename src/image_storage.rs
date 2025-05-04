@@ -1,12 +1,14 @@
+use rayon::iter::ParallelIterator;
 use crate::logger::Logger;
 use crate::printer::PrinterImageData;
 use std::fs::{File, ReadDir};
-use std::io::BufRead;
+use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::SystemTime;
 use std::{fmt, io};
+use rayon::prelude::ParallelBridge;
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -56,10 +58,10 @@ impl ImageStorage {
             save_path
         })
     }
-    
+
     fn get_image_name(image_name: &str) -> String {
         format!("{}_{}.{}", SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("This will always be correct")
-            .as_secs(),  image_name, Self::IMAGE_EXTENSION)   
+            .as_secs(),  image_name, Self::IMAGE_EXTENSION)
     }
 
     pub fn save_image(&self, image_name: &str,image_array: &Vec<Vec<String>>) -> Result<String, StorageError> {
@@ -70,10 +72,11 @@ impl ImageStorage {
             sleep(std::time::Duration::from_millis(200));
             path = path.join(Self::get_image_name(image_name));
         }
-        let mut file: File = File::create::<&Path>(path.as_ref()).map_err(|_| StorageError::SaveError)?;
+        let mut writer = BufWriter::new(File::create::<&Path>(path.as_ref()).map_err(|_| StorageError::SaveError)?);
         for row in image_array {
-            std::io::Write::write(&mut file, row.join(Self::CELL_SEPARATOR).as_bytes()).map_err(|_| StorageError::SaveError)?;
+            writeln!(writer, "{}", row.join(Self::CELL_SEPARATOR)).map_err(|_| StorageError::SaveError)?;
         }
+        writer.flush().map_err(|_| StorageError::SaveError)?;
         Ok(new_image_name)
     }
 
@@ -97,7 +100,7 @@ impl ImageLoadIterator {
             dir_iter: path.read_dir().map_err(|_| StorageError::OpeningDirError)?
         })
     }
-    
+
     pub fn wrap_into_valid(self) -> ValidImageLoadIterator {
         ValidImageLoadIterator {
             iterator: self,
@@ -112,35 +115,36 @@ impl ImageLoadIterator {
 
     fn load_image(image_path: PathBuf) -> Result<PrinterImageData, StorageError> {
         let mut lines = Self::read_lines(&image_path)?;
-        let mut result = Vec::new();
-        let first_line = lines.next();
-        if first_line.is_none() {
-            return Err(StorageError::LoadError(image_path.to_string_lossy().to_string()));
-        }
-        let first_line = first_line.unwrap()?;
+        let path_string = image_path.to_string_lossy().to_string();
+        let load_error = || StorageError::LoadError(path_string.clone());
+        let first_line: Vec<_> = lines.next().ok_or(load_error())??
+            .split(ImageStorage::CELL_SEPARATOR)
+            .map(str::to_string)
+            .collect();
         let expected_length: usize = first_line.len();
-        result.push(
-            first_line
-                .split(ImageStorage::CELL_SEPARATOR)
-                .map(str::to_string)
-                .collect(),
-        );
-        for line_result in lines {
-            let line = line_result?;
-            let current_len = line.len();
-            if current_len != expected_length {
-                return Err(StorageError::LoadError(image_path.to_string_lossy().to_string()));
-            }
-            result.push(
-                line.split(ImageStorage::CELL_SEPARATOR)
+        let mut result = vec![first_line];
+
+        let remaining_lines: Vec<_> = lines
+            .par_bridge()
+            .map(|line| {
+                let current_line: Vec<String> = line?.split(ImageStorage::CELL_SEPARATOR)
                     .map(str::to_string)
-                    .collect(),
-            );
-        }
+                    .collect();
+
+                if current_line.len() != expected_length {
+                    Err(load_error())
+                } else {
+                    Ok(current_line)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        result.reserve(remaining_lines.len());
+        result.extend(remaining_lines);
         Ok(PrinterImageData::new(
             Rc::new(image_path.file_name().expect("Path is already checked to be valid").to_string_lossy().to_string()),
             result,
         ))
+
     }
 }
 
@@ -170,7 +174,7 @@ pub struct ValidImageLoadIterator{
 
 impl Iterator for ValidImageLoadIterator{
     type Item = PrinterImageData;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iterator.next() {
@@ -180,5 +184,5 @@ impl Iterator for ValidImageLoadIterator{
             }
         }
     }
-    
+
 }
