@@ -1,7 +1,12 @@
-use std::{fmt, io};
-use std::fs::{DirEntry, File, ReadDir};
+use crate::logger::Logger;
+use crate::printer::PrinterImageData;
+use std::fs::{File, ReadDir};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::thread::sleep;
+use std::time::SystemTime;
+use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -9,7 +14,6 @@ pub enum StorageError {
     SaveError,
     LoadError(String),
     NotADirError,
-    NoImagesFoundError,
     OpeningDirError,
     IoError(io::Error)
 }
@@ -28,20 +32,19 @@ impl fmt::Display for StorageError {
             StorageError::SaveError => write!(f, "Could not save image to the given save directory"),
             StorageError::LoadError(image_name) => write!(f, "Image {image_name} couldn't be loaded"),
             StorageError::NotADirError => write!(f, "Failed to search for given keyword"),
-            StorageError::NoImagesFoundError => write!(f, "No valid images found in the given directory"),
             StorageError::OpeningDirError => write!(f, "Failed to open the given directory"),
             StorageError::IoError(err) => write!(f, "IO error: {}", err),
         }
     }
 }
 
-struct ImageStorage {
+pub struct ImageStorage {
    save_path: String
 }
 
 impl ImageStorage {
 
-    const IMAGE_EXTENSION: &'static str = ".cwi";
+    const IMAGE_EXTENSION: &'static str = "cwi";
     const CELL_SEPARATOR: &'static str = " ";
 
     pub fn new(save_path: String) -> Result<Self, StorageError> {
@@ -53,29 +56,39 @@ impl ImageStorage {
             save_path
         })
     }
+    
+    fn get_image_name(image_name: &str) -> String {
+        format!("{}_{}.{}", SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("This will always be correct")
+            .as_secs(),  image_name, Self::IMAGE_EXTENSION)   
+    }
 
-    pub fn save_image(&self, image_name: String,image_array: Vec<Vec<String>>) -> Result<String, StorageError> {
+    pub fn save_image(&self, image_name: &str,image_array: &Vec<Vec<String>>) -> Result<String, StorageError> {
         let path = Path::new(&self.save_path);
-        let path = path.join(image_name + ImageStorage::IMAGE_EXTENSION);
+        let new_image_name = Self::get_image_name(image_name);
+        let mut path = path.join(new_image_name.as_str());
+        while path.exists() {
+            sleep(std::time::Duration::from_millis(200));
+            path = path.join(Self::get_image_name(image_name));
+        }
         let mut file: File = File::create::<&Path>(path.as_ref()).map_err(|_| StorageError::SaveError)?;
         for row in image_array {
             std::io::Write::write(&mut file, row.join(Self::CELL_SEPARATOR).as_bytes()).map_err(|_| StorageError::SaveError)?;
         }
-        Ok(path.to_str().unwrap().to_string())
+        Ok(new_image_name)
     }
 
-    pub fn to_load_iterator(&self, load_path: String) -> Result<ImageLoadIterator, StorageError> {
+    pub fn to_load_iterator(&self, load_path: &str) -> Result<ImageLoadIterator, StorageError> {
         ImageLoadIterator::new(load_path)
     }
     
 }
 
-struct ImageLoadIterator{
+pub struct ImageLoadIterator{
     dir_iter: ReadDir
 }
 
 impl ImageLoadIterator {
-    pub fn new(load_path: String) -> Result<Self, StorageError> {
+    fn new(load_path: &str) -> Result<Self, StorageError> {
         let path = Path::new(&load_path);
         if !path.is_dir() {
             return Err(StorageError::NotADirError);
@@ -84,6 +97,12 @@ impl ImageLoadIterator {
             dir_iter: path.read_dir().map_err(|_| StorageError::OpeningDirError)?
         })
     }
+    
+    pub fn wrap_into_valid(self) -> ValidImageLoadIterator {
+        ValidImageLoadIterator {
+            iterator: self,
+        }
+    }
 
     fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
     where P: AsRef<Path>, {
@@ -91,12 +110,12 @@ impl ImageLoadIterator {
         Ok(io::BufReader::new(file).lines())
     }
 
-    fn load_image(image_path: PathBuf) -> Result<Vec<Vec<String>>, StorageError> {
+    fn load_image(image_path: PathBuf) -> Result<PrinterImageData, StorageError> {
         let mut lines = Self::read_lines(&image_path)?;
         let mut result = Vec::new();
         let first_line = lines.next();
         if first_line.is_none() {
-            return Err(StorageError::LoadError(image_path.to_str().unwrap().to_string()));
+            return Err(StorageError::LoadError(image_path.to_string_lossy().to_string()));
         }
         let first_line = first_line.unwrap()?;
         let expected_length: usize = first_line.len();
@@ -110,7 +129,7 @@ impl ImageLoadIterator {
             let line = line_result?;
             let current_len = line.len();
             if current_len != expected_length {
-                return Err(StorageError::LoadError(image_path.to_str().unwrap().to_string()));
+                return Err(StorageError::LoadError(image_path.to_string_lossy().to_string()));
             }
             result.push(
                 line.split(ImageStorage::CELL_SEPARATOR)
@@ -118,12 +137,15 @@ impl ImageLoadIterator {
                     .collect(),
             );
         }
-        Ok(result)
+        Ok(PrinterImageData::new(
+            Rc::new(image_path.file_name().expect("Path is already checked to be valid").to_string_lossy().to_string()),
+            result,
+        ))
     }
 }
 
 impl Iterator for ImageLoadIterator {
-    type Item = Result<Vec<Vec<String>>, StorageError>;
+    type Item = Result<PrinterImageData, StorageError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(entry) = self.dir_iter.next() {
@@ -139,6 +161,24 @@ impl Iterator for ImageLoadIterator {
             return Some(ImageLoadIterator::load_image(full_path));
         }
         None
-
     }
+}
+
+pub struct ValidImageLoadIterator{
+    iterator: ImageLoadIterator,
+}
+
+impl Iterator for ValidImageLoadIterator{
+    type Item = PrinterImageData;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.iterator.next() {
+                Some(Ok(image)) => return Some(image),
+                Some(Err(err)) => Logger::log_error(err.to_string()),
+                None => return None
+            }
+        }
+    }
+    
 }

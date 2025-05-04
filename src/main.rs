@@ -1,20 +1,24 @@
-mod downloader;
 mod converter;
+mod downloader;
+mod image_storage;
 mod printer;
-mod ImageStorage;
+mod logger;
 
 use crate::converter::Converter;
 use crate::downloader::ImageDownloader;
-use crate::printer::Printer;
+use crate::image_storage::{ImageStorage, ValidImageLoadIterator};
+use crate::logger::Logger;
+use crate::printer::{Printer, PrinterImageData};
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use dialoguer::Input;
+use dialoguer::{Input, Select};
+use std::env;
 use std::io;
 use std::process::exit;
 
 fn prompt_for_width() -> u32 {
     loop {
-        let width = prompt_for_keyword("Enter image width");
+        let width = prompt_user("Enter image width");
         match width.trim().parse::<u32>() {
             Ok(width) => return width,
             Err(_) => println!("Invalid width. Try again."),
@@ -22,56 +26,205 @@ fn prompt_for_width() -> u32 {
     }
 }
 
-fn prompt_for_keyword(prompt: &str) -> String {
-    Input::new()
-        .with_prompt(prompt)
-        .interact_text()
-        .unwrap()
+fn prompt_user(prompt: &str) -> String {
+    Input::new().with_prompt(prompt).interact_text().unwrap()
 }
 
 fn register_valid_downloader() -> ImageDownloader {
-    let keyword = prompt_for_keyword("Enter keyword");
+    let keyword = prompt_user("Enter keyword");
     ImageDownloader::new(keyword).unwrap_or_else(|error| {
         println!("Error: {}", error);
         register_valid_downloader()
     })
 }
 
-fn main() -> io::Result<()>{
+struct Settings {
+    save_location: String,
+    load_location: String,
+}
+
+fn main() -> io::Result<()> {
+    let mut settings = Settings {
+        save_location: env::current_dir()?.to_str().unwrap().to_string(),
+        load_location: env::current_dir()?.to_str().unwrap().to_string(),
+    };
     loop {
-        let downloader: ImageDownloader = register_valid_downloader();
-        let mut printer: Printer = Printer::new(Converter::new(downloader, prompt_for_width()));
-        //TODO always have menu visible, swap pictures instead of appending
-        println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
-        println!("Press 'Q' to change the keyword or 'ESC' to exit.");
-        loop {
-            if event::poll(std::time::Duration::from_millis(500))? {
-                if let Event::Key(key_event) = event::read()?{
-                    if key_event.kind == KeyEventKind::Press {
-                        match key_event.code {
-                            KeyCode::Char('b') | KeyCode::Char('B') => {
-                                printer.move_to_previous_image()
-                                    .map_or_else(|e| println!("Error: {}", e), |conv| -> () {
-                                        conv.print_current_image();
-                                    });
-                            },
-                            KeyCode::Char('n') | KeyCode::Char('N') => {
-                                printer.move_to_next_image()
-                                    .map_or_else(|e| println!("Error: {}", e), |conv| -> () {
-                                        conv.print_current_image();
-                                    });
-                            },
-                            KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                break;
-                            },
-                            KeyCode::Esc => {
-                                exit(0);
-                            },
-                            _ => {}
-                        }
+        let image_storage = ImageStorage::new(settings.save_location.to_string());
+        let items = vec!["Generator mode", "Load saved images", "Change settings", "Quit"];
+        let selection = Select::new()
+            .with_prompt("Welcome to Colourful Words!")
+            .default(0)
+            .items(&items)
+            .interact()
+            .unwrap();
+        match selection {
+            0 => {
+                if image_storage.is_err(){
+                    Logger::log_error(image_storage.as_ref().err().unwrap().to_string())
+                }else{
+                    let downloader: ImageDownloader = register_valid_downloader();
+                    let mut printer: Printer<Converter> = Printer::new(Converter::new(downloader, prompt_for_width()));
+                    printer_menu(&create_generator_menu(), &mut printer, &image_storage.unwrap())?;
+                }
+            },
+            1 => {
+                if image_storage.is_err(){
+                    Logger::log_error(image_storage.as_ref().err().unwrap().to_string())
+                }else{
+                    let img_loader = image_storage.as_ref().unwrap().to_load_iterator(settings.load_location.as_str());
+                    if img_loader.is_err(){
+                        Logger::log_error(img_loader.as_ref().err().unwrap().to_string())
+                    }else{
+                        let mut printer: Printer<ValidImageLoadIterator> = Printer::new(img_loader.unwrap().wrap_into_valid());
+                        printer_menu(&create_load_menu(), &mut printer, &image_storage.unwrap())?;
+                    }
+                }
+            },
+            2 => {
+                settings_menu(&mut settings);
+            },
+            3 => {
+                exit(0);
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn settings_menu(settings: &mut Settings) {
+    let items = vec!["Change image save location", "Change image loading location", "Go back"];
+    let selection = Select::new()
+        .with_prompt("Settings")
+        .default(0)
+        .items(&items)
+        .interact()
+        .unwrap();
+    match selection {
+        0 => {
+            let new_location = prompt_user("Enter new saving directory path (it must already exist)");
+            settings.save_location = new_location;
+            Logger::log_info(format!("Saving location changed to: {}", settings.save_location));
+        },
+        1 => {
+            let new_location = prompt_user("Enter new loading directory path (it must already exist)");
+            settings.load_location = new_location;
+            Logger::log_info(format!("Loading location changed to: {}", settings.load_location));
+        },
+        2 => {
+            return;
+        },
+        _ => unreachable!(),
+    }
+}
+
+struct MenuInfo<G>
+where G: Iterator<Item=PrinterImageData>{
+    handle_key_press: fn(KeyCode, image_storage: &ImageStorage, printer: &mut Printer<G>) -> bool,
+    print_info: fn() -> ()
+}
+
+fn printer_menu<G>(menu_info: &MenuInfo<G>, printer: &mut Printer<G>, image_storage: &ImageStorage) -> io::Result<()>
+where G: Iterator<Item=PrinterImageData>{
+    (menu_info.print_info)();
+    loop {
+        if event::poll(std::time::Duration::from_millis(500))? {
+            if let Event::Key(key_event) = event::read()? {
+                if key_event.kind == KeyEventKind::Press {
+                    if !(menu_info.handle_key_press)(key_event.code, image_storage, printer) {
+                        return Ok(());
                     }
                 }
             }
         }
     }
+}
+
+fn create_load_menu() -> MenuInfo<ValidImageLoadIterator> {
+    MenuInfo{
+        handle_key_press: load_menu_handler,
+        print_info: || -> () {
+            println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
+            println!("Press 'Q' to quit the mode.");
+        }
+    }
+}
+
+fn load_menu_handler(code: KeyCode, _: &ImageStorage, printer: &mut Printer<ValidImageLoadIterator>) -> bool {
+    match code {
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            printer.move_to_previous_image().map_or_else(
+                |e| Logger::log_error(e.to_string()),
+                |printer| -> () {
+                    printer.print_current_image();
+                },
+            );
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            printer.move_to_next_image().map_or_else(
+                |e| Logger::log_error(e.to_string()),
+                |printer| -> () {
+                    printer.print_current_image();
+                },
+            );
+        }
+        KeyCode::Char('q') | KeyCode::Char('Q') => {
+            return false;
+        }
+        _ => {}
+    }
+    true
+}
+
+
+fn create_generator_menu() -> MenuInfo<Converter> {
+    MenuInfo{
+        handle_key_press: generator_menu_handler,
+        print_info: || -> () {
+            println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
+            println!("Press 'S' to save the current image in the specified folder.");
+            println!("Press 'Q' to quit the mode.");
+        }
+    }
+}
+
+fn generator_menu_handler(code: KeyCode, image_storage: &ImageStorage, printer: &mut Printer<Converter>) -> bool {
+    match code {
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            printer.move_to_previous_image().map_or_else(
+                |e| Logger::log_error(e.to_string()),
+                |printer| -> () {
+                    printer.print_current_image();
+                },
+            );
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            printer.move_to_next_image().map_or_else(
+                |e| Logger::log_error(e.to_string()),
+                |printer| -> () {
+                    printer.print_current_image();
+                },
+            );
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            let current_image = printer.get_current_image_data();
+            if current_image.is_err() {
+                Logger::log_error(current_image.err().unwrap().to_string());
+            } else {
+                let (image_name, image_array) = current_image.unwrap();
+                image_storage
+                    .save_image(image_name, image_array)
+                    .map_or_else(
+                        |e| Logger::log_error(e.to_string()),
+                        |image_name| -> () {
+                            Logger::log_success(format!("Image {} saved successfully.", image_name));
+                        },
+                    )
+            }
+        }
+        KeyCode::Char('q') | KeyCode::Char('Q') => {
+            return false;
+        }
+        _ => {}
+    }
+    true
 }
