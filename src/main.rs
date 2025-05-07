@@ -50,15 +50,27 @@ fn register_valid_downloader() -> ImageDownloader {
     }
 }
 
+fn register_valid_printing_rate() -> u16 {
+    loop {
+        let rate = prompt_user("Enter new printing rate in milliseconds (default is 5 ms)");
+        match rate.trim().parse::<u16>() {
+            Ok(rate) => return rate,
+            Err(_) => Logger::log_error("Invalid printing rate. Please enter an integer [0 - 655635]."),
+        }
+    }
+}
+
 struct Settings {
     save_location: String,
     load_location: String,
+    printing_rate_ms: u16
 }
 
 fn main() -> io::Result<()> {
     let mut settings = Settings {
         save_location: env::current_dir()?.to_str().unwrap().to_string(),
         load_location: env::current_dir()?.to_str().unwrap().to_string(),
+        printing_rate_ms: 5
     };
     loop {
         let items = vec![
@@ -79,7 +91,7 @@ fn main() -> io::Result<()> {
                     Ok(image_storage) => {
                         let downloader: ImageDownloader = register_valid_downloader();
                         let mut printer: Printer<Converter> =
-                            Printer::new(Converter::new(downloader, prompt_for_width()));
+                            Printer::new(Converter::new(downloader, prompt_for_width()), settings.printing_rate_ms);
                         printer_menu(&create_generator_menu(), &mut printer, &image_storage)?;
                     }
                     Err(e) => Logger::log_error(&e.to_string()),
@@ -91,7 +103,7 @@ fn main() -> io::Result<()> {
                         match image_storage.to_load_iterator(settings.load_location.as_str()) {
                             Ok(img_loader) => {
                                 let mut printer: Printer<ValidImageLoadIterator> =
-                                    Printer::new(img_loader.wrap_into_valid());
+                                    Printer::new(img_loader.wrap_into_valid(), settings.printing_rate_ms);
                                 printer_menu(&create_load_menu(), &mut printer, &image_storage)?;
                             }
                             Err(e) => Logger::log_error(&e.to_string()),
@@ -115,6 +127,7 @@ fn settings_menu(settings: &mut Settings) {
     let items = vec![
         "Change image save location",
         "Change image loading location",
+        "Change image printing rate",
         "Go back",
     ];
     let selection = Select::new()
@@ -141,6 +154,13 @@ fn settings_menu(settings: &mut Settings) {
             );
         }
         2 => {
+            let new_printing_rate = register_valid_printing_rate();
+            settings.printing_rate_ms = new_printing_rate;
+            Logger::log_info(
+                format!("Printing rate changed to: {}", settings.printing_rate_ms).as_str(),
+            );
+        }
+        3 => {
             return;
         }
         _ => unreachable!(),
@@ -187,7 +207,7 @@ fn create_load_menu() -> MenuInfo<ValidImageLoadIterator> {
     }
 }
 
-fn handle_and_print<G>(res: Result<&mut Printer<G>, PrinterError>) 
+fn handle_and_print<G>(res: Result<&mut Printer<G>, PrinterError>)
 where G: Iterator<Item = PrinterImageData>{
     res.map_or_else(
         |e| Logger::log_error(e.to_string().as_str()),

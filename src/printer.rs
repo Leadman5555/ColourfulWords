@@ -34,15 +34,17 @@ struct ColouredImage {
     index: usize,
     image_name: Rc<String>,
     is_rendered: bool,
+    printing_rate_ms: u16
 }
 
 impl ColouredImage {
-    fn new(image_array: Vec<Vec<String>>, index: usize, image_name: &Rc<String>) -> Self {
+    fn new(image_array: Vec<Vec<String>>, index: usize, image_name: &Rc<String>, printing_rate_ms: u16) -> Self {
         Self {
             image_array,
             index,
             image_name: image_name.clone(),
             is_rendered: false,
+            printing_rate_ms,
         }
     }
 
@@ -77,7 +79,7 @@ impl ColouredImage {
             print!("\x1B[{};{}H", row + 1, col + 1);
             print!("{}", self.image_array[row][col]);
             io::stdout().flush()?;
-            thread::sleep(Duration::from_millis(5));
+            thread::sleep(Duration::from_millis(self.printing_rate_ms as u64));
         }
 
         print!("\x1B[{};1H", rows + 1); //move down
@@ -132,17 +134,19 @@ where
     image_generator: G,
     coloured_images: Vec<ColouredImage>,
     current_image: usize,
+    printing_rate_ms: u16,
 }
 
 impl<G> Printer<G>
 where
     G: Iterator<Item = PrinterImageData>,
 {
-    pub fn new(image_generator: G) -> Self {
+    pub fn new(image_generator: G, printing_rate_ms: u16) -> Self {
         Self {
             image_generator,
             coloured_images: Vec::new(),
             current_image: 0,
+            printing_rate_ms,       
         }
     }
 
@@ -174,6 +178,7 @@ where
             image_data.image_array,
             new_image_index,
             &image_data.image_name,
+            self.printing_rate_ms
         ));
         self.current_image = new_image_index; 
     }
@@ -212,6 +217,10 @@ where
                 None => Err(PrinterError::NoImageLeftError),
             }
         }
-
+    }
+    
+    #[allow(dead_code)]
+    pub fn set_printing_rate(&mut self, printing_rate_ms: u16) {
+        self.printing_rate_ms = printing_rate_ms;
     }
 }
