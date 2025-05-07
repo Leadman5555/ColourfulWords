@@ -1,11 +1,26 @@
 use crate::downloader::ImageDownloader;
+use crate::logger::Logger;
 use crate::printer::PrinterImageData;
 use bytes::Bytes;
 use image::{GenericImageView, RgbImage};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
-use std::fmt::Write as ftmWrite;
+use std::fmt;
+use std::fmt::Write;
 use std::rc::Rc;
+
+#[derive(Debug)]
+pub enum ConverterError {
+    ImageLoadingError,
+}
+
+impl fmt::Display for ConverterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConverterError::ImageLoadingError => write!(f, "Failed to load image from memory"),
+        }
+    }
+}
 
 pub struct Converter {
     image_iterator: ImageDownloader,
@@ -14,7 +29,7 @@ pub struct Converter {
 
 impl Converter {
     const ASCII_CHARS: [char; 13] = [
-        '@', '#', 'S', '%', '&', '?', '*', '=' ,'+', '-', ':', ',', '.',
+        '@', '#', 'S', '%', '&', '?', '*', '=', '+', '-', ':', ',', '.',
     ];
 
     pub fn new(image_iterator: ImageDownloader, image_width: u32) -> Self {
@@ -24,9 +39,13 @@ impl Converter {
         }
     }
 
-    fn convert_image(image_width: u32, image_name: Rc<String>, image_bytes: Bytes) -> PrinterImageData {
-        let img = image::load_from_memory(&image_bytes)
-            .expect("This should never fail as image is already in memory");
+    fn convert_image(
+        image_width: u32,
+        image_name: Rc<String>,
+        image_bytes: Bytes,
+    ) -> Result<PrinterImageData, ConverterError> {
+        let img =
+            image::load_from_memory(&image_bytes).map_err(|_| ConverterError::ImageLoadingError)?;
         let resized: RgbImage = {
             let (original_width, original_height) = img.dimensions();
             let height = original_height * image_width / original_width;
@@ -59,7 +78,7 @@ impl Converter {
                 image_row
             })
             .collect();
-        PrinterImageData::new(image_name, converted_image)
+        Ok(PrinterImageData::new(image_name, converted_image))
     }
 }
 
@@ -67,8 +86,23 @@ impl Iterator for Converter {
     type Item = PrinterImageData;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.image_iterator
-            .next()
-            .map(|image_data| Self::convert_image(self.image_width, image_data.0, image_data.1))
+        loop {
+            match self.image_iterator.next() {
+                Some(image_data_result) => {
+                    let (image_name, image_bytes) = image_data_result;
+                    match Self::convert_image(self.image_width, image_name.clone(), image_bytes) {
+                        Ok(printer_image_data) => return Some(printer_image_data),
+                        Err(e) => {
+                            Logger::log_error(format!(
+                                "Failed to convert image '{}': {}",
+                                image_name, e
+                            ).as_str());
+                        }
+                    }
+                }
+                None => return None,
+            }
+        }
+
     }
 }

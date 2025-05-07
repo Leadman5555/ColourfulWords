@@ -33,7 +33,7 @@ impl fmt::Display for StorageError {
             StorageError::SavePathError => write!(f, "Given save path is not a valid directory"),
             StorageError::SaveError => write!(f, "Could not save image to the given save directory"),
             StorageError::LoadError(image_name) => write!(f, "Image {image_name} couldn't be loaded"),
-            StorageError::NotADirError => write!(f, "Failed to search for given keyword"),
+            StorageError::NotADirError => write!(f, "Given path is not a directory - it may be a file instead"),
             StorageError::OpeningDirError => write!(f, "Failed to open the given directory"),
             StorageError::IoError(err) => write!(f, "IO error: {}", err),
         }
@@ -76,7 +76,7 @@ impl ImageStorage {
         for row in image_array {
             writeln!(writer, "{}", row.join(Self::CELL_SEPARATOR)).map_err(|_| StorageError::SaveError)?;
         }
-        writer.flush().map_err(|_| StorageError::SaveError)?;
+        writer.flush()?;
         Ok(new_image_name)
     }
 
@@ -140,8 +140,9 @@ impl ImageLoadIterator {
             .collect::<Result<Vec<_>, _>>()?;
         result.reserve(remaining_lines.len());
         result.extend(remaining_lines);
+        let image_file_name = Rc::new(image_path.file_name().ok_or_else(load_error)?.to_string_lossy().into_owned());
         Ok(PrinterImageData::new(
-            Rc::new(image_path.file_name().expect("Path is already checked to be valid").to_string_lossy().to_string()),
+            image_file_name,
             result,
         ))
 
@@ -155,9 +156,15 @@ impl Iterator for ImageLoadIterator {
         while let Some(entry) = self.dir_iter.next() {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(_) => continue,
+                Err(e) => {
+                    Logger::log_error(format!("Failed to read file: {}", e).as_str());
+                    continue;
+                },
             };
             let full_path = entry.path();
+            if !full_path.is_file() { 
+                continue;
+            }
             let extension = full_path.extension();
             if extension.is_none() || extension.unwrap() != ImageStorage::IMAGE_EXTENSION {
                 continue;
@@ -179,7 +186,7 @@ impl Iterator for ValidImageLoadIterator{
         loop {
             match self.iterator.next() {
                 Some(Ok(image)) => return Some(image),
-                Some(Err(err)) => Logger::log_error(err.to_string()),
+                Some(Err(err)) => Logger::log_error(format!("Skipping problematic file during load: {}", err).as_str()),
                 None => return None
             }
         }

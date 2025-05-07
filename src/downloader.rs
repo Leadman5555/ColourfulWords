@@ -3,6 +3,7 @@ use reqwest::blocking;
 use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
+use crate::logger::Logger;
 
 #[derive(Debug)]
 pub enum DownloaderError {
@@ -33,8 +34,12 @@ pub struct ImageDownloader {
 }
 
 impl ImageDownloader {
+
+    const BING_SEARCH_URL_PREFIX: &'static str = "https://www.bing.com/images/search?q=";
+    const DEFAULT_IMAGE_SELECTOR: &'static str = "img.mimg";
+
     pub fn new(keyword: String) -> Result<Self, DownloaderError> {
-        let urls = Self::get_urls(keyword.as_str(), "img.mimg")?;
+        let urls = Self::get_urls(keyword.as_str(), Self::DEFAULT_IMAGE_SELECTOR)?;
         Ok(Self {
             urls,
             index: 0,
@@ -44,17 +49,14 @@ impl ImageDownloader {
     }
 
     fn get_search_url(keyword: &str) -> String {
-        format!("{}{}", "https://www.bing.com/images/search?q=", keyword)
+        format!("{}{}", Self::BING_SEARCH_URL_PREFIX, keyword)
     }
 
     fn get_urls(keyword: &str, selector: &str) -> Result<Vec<String>, DownloaderError> {
-        let browser = Browser::new(
-            LaunchOptionsBuilder::default()
-                .headless(true)
-                .build()
-                .unwrap(),
-        )
-        .map_err(|_| DownloaderError::BrowserError)?;
+        let launch_options = LaunchOptionsBuilder::default().headless(true).build()
+            .map_err(|_| DownloaderError::BrowserError)?;
+        let browser = Browser::new(launch_options)
+            .map_err(|_| DownloaderError::BrowserError)?;
         let tab = browser
             .new_tab()
             .map_err(|_| DownloaderError::BrowserError)?;
@@ -85,11 +87,23 @@ impl Iterator for ImageDownloader {
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.index < self.urls.len() {
-            let tmp = self.index;
+            let url = &self.urls[self.index];
             self.index += 1;
-            if let Ok(res) = self.client.get(self.urls[tmp].as_str()).send() {
-                if let Ok(bytes) = res.bytes() {
-                    return Some((self.keyword.clone(), bytes));
+            match self.client.get(url).send() {
+                Ok(res) => {
+                    if res.status().is_success() {
+                        match res.bytes() {
+                            Ok(bytes) => return Some((self.keyword.clone(), bytes)),
+                            Err(e) => {
+                                Logger::log_error(format!("Failed to read bytes from {}: {}", url, e).as_str());
+                            }
+                        }
+                    } else {
+                        Logger::log_error(format!("Request to {} failed with status: {}", url, res.status()).as_str());
+                    }
+                }
+                Err(e) => {
+                    Logger::log_error(format!("Failed to send request to {}: {}", url, e).as_str());
                 }
             }
         }
