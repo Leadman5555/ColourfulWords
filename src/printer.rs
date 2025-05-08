@@ -1,9 +1,12 @@
+use copypasta::{ClipboardContext, ClipboardProvider};
+use crossterm::style::Print;
+use crossterm::terminal::{Clear, ClearType};
+use crossterm::{cursor, QueueableCommand};
 use rand::prelude::SliceRandom;
 use std::io::Write;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, io, thread};
-use copypasta::{ClipboardContext, ClipboardProvider};
 
 #[derive(Debug)]
 pub enum PrinterError {
@@ -23,7 +26,7 @@ impl fmt::Display for PrinterError {
             PrinterError::IoError(e) => write!(f, "IO Error during print: {}", e),
             PrinterError::EmptyImageError => write!(f, "Cannot print an empty image."),
             PrinterError::ClipboardError => write!(f, "Failed to copy the current image to clipboard."),
-            PrinterError::InvalidImageError => write!(f, "Image contains invalid sequences of characters."),       
+            PrinterError::InvalidImageError => write!(f, "Image contains invalid sequences of characters."),
         }
     }
 }
@@ -69,40 +72,36 @@ impl ColouredImage {
         if self.image_array.is_empty() || self.image_array[0].is_empty() {
             return Err(PrinterError::EmptyImageError);
         }
+        let mut stdout = io::stdout();
         let rows = self.image_array.len();
         let cols = self.image_array[0].len();
         let printing_order = Self::get_random_indices(rows, cols);
-        print!("\x1B[2J\x1B[1;1H"); //clear, top-left
+        stdout.queue(cursor::Hide)?.queue(Clear(ClearType::All))?.queue(cursor::MoveTo(0, 0))?.flush()?;
         let empty_row = " ".repeat(cols);
         for _ in 0..rows {
-            println!("{}", empty_row);
+            stdout.queue(Print(&empty_row))?;
         }
-        print!("\x1B[{}A", rows); //move to the beginning
-        io::stdout().flush()?;
-
+        stdout.queue(cursor::MoveTo(0, 0))?.flush()?;
         for &(row, col) in &printing_order {
-            print!("\x1B[{};{}H", row + 1, col + 1);
-            print!("{}", self.image_array[row][col]);
-            io::stdout().flush()?;
+            stdout
+                .queue(cursor::MoveTo(col as u16, row as u16))?
+                .queue(Print(&self.image_array[row][col].to_string()))?
+                .flush()?;
             thread::sleep(Duration::from_millis(self.printing_rate_ms as u64));
         }
-
-        print!("\x1B[{};1H", rows + 1); //move down
-        io::stdout().flush()?;
-        println!();
+        stdout.queue(cursor::MoveTo(0, rows as u16))?
+            .queue(Print('\n'))?
+            .queue(cursor::Show)?
+            .flush()?;
         Ok(())
     }
 
     fn instant_print(&self) -> Result<(), PrinterError> {
-        print!("\x1B[2J\x1B[1;1H");
-        io::stdout().flush()?;
+        let mut stdout = io::stdout();
+        stdout.queue(Clear(ClearType::All))?.queue(cursor::MoveTo(0, 0))?.flush()?;
         for row in &self.image_array {
-            for col in row {
-                print!("{}", col);
-            }
-            println!();
+            stdout.queue(Print(&row.join("")))?.queue(Print('\n'))?.flush()?;
         }
-        io::stdout().flush()?;
         Ok(())
     }
 
@@ -116,14 +115,14 @@ impl ColouredImage {
         }
         Ok(())
     }
-    
+
     fn get_clipboard_version(&self) -> Result<String, PrinterError> {
         if self.image_array.is_empty() || self.image_array[0].is_empty() {
             return Err(PrinterError::EmptyImageError);
         }
         let mut result = String::with_capacity(self.image_array.len() * (self.image_array[0].len() + 1) + 1);
         for row in &self.image_array {
-            row.into_iter().try_for_each(|cell| 
+            row.into_iter().try_for_each(|cell|
                 return match cell[..cell.len() - 2].rfind('m') { //..m{CHAR}\..
                 Some(backslash_index) => {
                     if backslash_index < cell.len() - 2 {
@@ -249,7 +248,7 @@ where
             }
         }
     }
-    
+
     pub fn copy_current_image_to_clipboard(&mut self) -> Result<(), PrinterError> {
         if self.coloured_images.is_empty() {
             return Err(PrinterError::NoImagesRegisteredError);

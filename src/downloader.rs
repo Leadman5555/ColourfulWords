@@ -1,9 +1,9 @@
+use crate::logger::Logger;
 use headless_chrome::{Browser, LaunchOptionsBuilder};
 use reqwest::blocking;
 use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
-use crate::logger::Logger;
 
 #[derive(Debug)]
 pub enum DownloaderError {
