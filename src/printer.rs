@@ -72,6 +72,9 @@ impl ColouredImage {
         if self.image_array.is_empty() || self.image_array[0].is_empty() {
             return Err(PrinterError::EmptyImageError);
         }
+        if self.printing_rate_ms == 0 {
+            return self.instant_print();
+        }
         let mut stdout = io::stdout();
         let rows = self.image_array.len();
         let cols = self.image_array[0].len();
