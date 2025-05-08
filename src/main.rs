@@ -17,11 +17,12 @@ use std::io;
 use std::process::exit;
 
 fn prompt_for_width() -> u32 {
+   
     loop {
-        let width_str = prompt_user("Enter image width");
+        let width_str = prompt_user("Enter image width (tip: enter 100 and zoom out with CRTL-)");
         match width_str.trim().parse::<u32>() {
             Ok(width) => return width,
-            Err(_) => Logger::log_error("Invalid width. Please enter a number."),
+            Err(_) => Logger::log_error("Invalid width. Please enter a positive integer."),
         }
     }
 }
@@ -66,6 +67,36 @@ struct Settings {
     printing_rate_ms: u16
 }
 
+const BANNER: &'static str =
+"\x1B[38;2;255;0;0mW\x1B[0m\
+\x1B[38;2;255;127;0me\x1B[0m\
+\x1B[38;2;255;255;0ml\x1B[0m\
+\x1B[38;2;0;255;0mc\x1B[0m\
+\x1B[38;2;56;241;255mo\x1B[0m\
+\x1B[38;2;75;0;130mm\x1B[0m\
+\x1B[38;2;148;0;211me\x1B[0m\
+\x1B[38;2;255;0;0m \x1B[0m\
+\x1B[38;2;255;127;0mt\x1B[0m\
+\x1B[38;2;255;255;0mo\x1B[0m\
+\x1B[38;2;0;255;0m \x1B[0m\
+\x1B[38;2;56;241;255mC\x1B[0m\
+\x1B[38;2;75;0;130mo\x1B[0m\
+\x1B[38;2;148;0;211ml\x1B[0m\
+\x1B[38;2;255;0;0mo\x1B[0m\
+\x1B[38;2;255;127;0mu\x1B[0m\
+\x1B[38;2;255;255;0mr\x1B[0m\
+\x1B[38;2;0;255;0mf\x1B[0m\
+\x1B[38;2;56;241;255mu\x1B[0m\
+\x1B[38;2;75;0;130ml\x1B[0m\
+\x1B[38;2;148;0;211m \x1B[0m\
+\x1B[38;2;255;0;0mW\x1B[0m\
+\x1B[38;2;255;127;0mo\x1B[0m\
+\x1B[38;2;255;255;0mr\x1B[0m\
+\x1B[38;2;0;255;0md\x1B[0m\
+\x1B[38;2;56;241;255ms\x1B[0m\
+\x1B[38;2;75;0;130m!\x1B[0m";
+
+
 fn main() -> io::Result<()> {
     let mut settings = Settings {
         save_location: env::current_dir()?.to_str().unwrap().to_string(),
@@ -80,7 +111,7 @@ fn main() -> io::Result<()> {
             "Quit",
         ];
         let selection = Select::new()
-            .with_prompt("Welcome to Colourful Words!")
+            .with_prompt(BANNER)
             .default(0)
             .items(&items)
             .interact()
@@ -202,6 +233,7 @@ fn create_load_menu() -> MenuInfo<ValidImageLoadIterator> {
         handle_key_press: load_menu_handler,
         print_info: || -> () {
             println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
+            println!("Press 'C' to copy a colourless version of the current image to clipboard.");
             println!("Press 'Q' to quit the mode.");
         },
     }
@@ -232,6 +264,10 @@ fn load_menu_handler(
         KeyCode::Char('n') | KeyCode::Char('N') => {
             handle_and_print(printer.move_to_next_image());
         }
+        KeyCode::Char('C') | KeyCode::Char('c') => {
+            printer.copy_current_image_to_clipboard()
+                .map_or_else(|e| Logger::log_error(e.to_string().as_str()), |_| Logger::log_success("Image copied to clipboard."));
+        }
         KeyCode::Char('q') | KeyCode::Char('Q') => {
             return false;
         }
@@ -246,6 +282,7 @@ fn create_generator_menu() -> MenuInfo<Converter> {
         print_info: || -> () {
             println!("Press 'B' to go back to previous image or 'N' to swap to the next one.");
             println!("Press 'S' to save the current image in the specified folder.");
+            println!("Press 'C' to copy a colourless version of the current image to clipboard.");
             println!("Press 'Q' to quit the mode.");
         },
     }
@@ -281,6 +318,10 @@ fn generator_menu_handler(
                         },
                     )
             }
+        }
+        KeyCode::Char('C') | KeyCode::Char('c') => {
+            printer.copy_current_image_to_clipboard()
+                .map_or_else(|e| Logger::log_error(e.to_string().as_str()), |_| Logger::log_success("Image copied to clipboard."));
         }
         KeyCode::Char('q') | KeyCode::Char('Q') => {
             return false;

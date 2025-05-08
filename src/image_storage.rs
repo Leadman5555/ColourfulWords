@@ -1,4 +1,3 @@
-use rayon::iter::ParallelIterator;
 use crate::logger::Logger;
 use crate::printer::PrinterImageData;
 use std::fs::{File, ReadDir};
@@ -8,7 +7,6 @@ use std::rc::Rc;
 use std::thread::sleep;
 use std::time::SystemTime;
 use std::{fmt, io};
-use rayon::prelude::ParallelBridge;
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -125,7 +123,6 @@ impl ImageLoadIterator {
         let mut result = vec![first_line];
 
         let remaining_lines: Vec<_> = lines
-            .par_bridge()
             .map(|line| {
                 let current_line: Vec<String> = line?.split(ImageStorage::CELL_SEPARATOR)
                     .map(str::to_string)
@@ -145,7 +142,6 @@ impl ImageLoadIterator {
             image_file_name,
             result,
         ))
-
     }
 }
 

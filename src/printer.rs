@@ -3,6 +3,7 @@ use std::io::Write;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, io, thread};
+use copypasta::{ClipboardContext, ClipboardProvider};
 
 #[derive(Debug)]
 pub enum PrinterError {
@@ -10,6 +11,8 @@ pub enum PrinterError {
     NoImagesRegisteredError,
     IoError(io::Error),
     EmptyImageError,
+    ClipboardError,
+    InvalidImageError,
 }
 
 impl fmt::Display for PrinterError {
@@ -19,6 +22,8 @@ impl fmt::Display for PrinterError {
             PrinterError::NoImagesRegisteredError => write!(f, "No images registered."),
             PrinterError::IoError(e) => write!(f, "IO Error during print: {}", e),
             PrinterError::EmptyImageError => write!(f, "Cannot print an empty image."),
+            PrinterError::ClipboardError => write!(f, "Failed to copy the current image to clipboard."),
+            PrinterError::InvalidImageError => write!(f, "Image contains invalid sequences of characters."),       
         }
     }
 }
@@ -110,6 +115,32 @@ impl ColouredImage {
             self.instant_print()?;
         }
         Ok(())
+    }
+    
+    fn get_clipboard_version(&self) -> Result<String, PrinterError> {
+        if self.image_array.is_empty() || self.image_array[0].is_empty() {
+            return Err(PrinterError::EmptyImageError);
+        }
+        let mut result = String::with_capacity(self.image_array.len() * (self.image_array[0].len() + 1) + 1);
+        for row in &self.image_array {
+            row.into_iter().try_for_each(|cell| 
+                return match cell[..cell.len() - 2].rfind('m') { //..m{CHAR}\..
+                Some(backslash_index) => {
+                    if backslash_index < cell.len() - 2 {
+                        result.push_str(&cell[backslash_index +1.. backslash_index + 2]);
+                        Ok(())
+                    } else {
+                        Err(PrinterError::InvalidImageError)
+                    }
+                }
+                None => Err(PrinterError::InvalidImageError),
+            })?;
+            result.push('\n');
+        }
+        if !result.is_empty() {
+            result.pop();
+        }
+        Ok(result)
     }
 }
 
@@ -217,6 +248,17 @@ where
                 None => Err(PrinterError::NoImageLeftError),
             }
         }
+    }
+    
+    pub fn copy_current_image_to_clipboard(&mut self) -> Result<(), PrinterError> {
+        if self.coloured_images.is_empty() {
+            return Err(PrinterError::NoImagesRegisteredError);
+        }
+        let mut clip_ctx = ClipboardContext::new()
+            .map_err(|_| PrinterError::ClipboardError)?;
+        clip_ctx.set_contents(self.coloured_images[self.current_image].get_clipboard_version()?)
+            .map_err(|_| PrinterError::ClipboardError)?;
+        Ok(())
     }
     
     #[allow(dead_code)]
