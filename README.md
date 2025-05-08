@@ -4,7 +4,7 @@
 
 ## Features
 
-![img.png](img.png)
+![menu.png](readme_assets/menu.png)
 
 ### Generator mode (internet connection required)
 
